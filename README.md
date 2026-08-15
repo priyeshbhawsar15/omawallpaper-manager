@@ -17,7 +17,7 @@ omarchy pkg add imagemagick zenity
 Then install and enable the plugin:
 
 ```bash
-omarchy plugin add https://github.com/priyeshbhawsar15/omarchy-wallpaper-controller.git --enable
+omarchy plugin add https://github.com/priyeshbhawsar15/omawallpaper-manager.git --enable
 ```
 
 Open **Wallpaper Controller** from the Omarchy menu under Style. On a Quattro
