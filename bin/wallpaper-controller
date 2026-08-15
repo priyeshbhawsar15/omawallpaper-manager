@@ -1,0 +1,379 @@
+#!/usr/bin/env python3
+"""Single owner for live/static wallpapers used by the Quickshell controller."""
+import hashlib
+import json
+import os
+import random
+import signal
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+HOME = Path.home()
+CONFIG = HOME / ".config/omarchy/wallpaper-controller.json"
+STATE = HOME / ".local/state/omarchy/wallpaper-controller"
+ACTIVE = STATE / "active.json"
+PID = STATE / "renderer.pid"
+FRAMES = STATE / "static-frames"
+TRANSPARENT = HOME / ".config/omarchy/backgrounds/wallpaper-controller-transparent.png"
+WORKSHOP_CANDIDATES = [
+    HOME / ".local/share/Steam/steamapps/workshop/content/431960",
+    HOME / ".steam/steam/steamapps/workshop/content/431960",
+    HOME / ".var/app/com.valvesoftware.Steam/data/Steam/steamapps/workshop/content/431960",
+]
+IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp", ".bmp", ".gif"}
+
+
+def run(args, check=False):
+    return subprocess.run(args, check=check, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+
+
+def workshop():
+    for candidate in WORKSHOP_CANDIDATES:
+        if candidate.is_dir():
+            return candidate
+    return None
+
+
+def defaults():
+    return {
+        "version": 1,
+        "rotationEnabled": True,
+        "intervalMinutes": 30,
+        "cycle": [],
+        "static": [],
+        "active": "",
+        "shuffleRemaining": [],
+        "spanGroups": [["DP-6", "DP-4"]],
+        "renderer": {"fps": 30, "compatibility": True},
+    }
+
+
+def load_config():
+    data = defaults()
+    try:
+        saved = json.loads(CONFIG.read_text())
+        if isinstance(saved, dict): data.update(saved)
+    except (OSError, json.JSONDecodeError):
+        pass
+    return data
+
+
+def save_config(data):
+    CONFIG.parent.mkdir(parents=True, exist_ok=True)
+    tmp = CONFIG.with_suffix(".tmp")
+    tmp.write_text(json.dumps(data, indent=2) + "\n")
+    tmp.replace(CONFIG)
+
+
+def dynamic_entries():
+    root = workshop()
+    if not root: return []
+    entries = []
+    for item in root.iterdir():
+        project = item / "project.json"
+        if not item.is_dir() or not project.is_file(): continue
+        try:
+            data = json.loads(project.read_text(errors="replace"))
+        except (OSError, json.JSONDecodeError):
+            data = {}
+        preview = data.get("preview", "")
+        preview_path = item / preview if preview else None
+        if not preview_path or not preview_path.is_file():
+            preview_path = next((p for p in item.glob("preview.*") if p.suffix.lower() in IMAGE_EXTENSIONS), None)
+        entries.append({
+            "id": "we:" + item.name, "kind": "live", "workshopId": item.name,
+            "title": str(data.get("title") or item.name), "type": str(data.get("type") or "unknown").lower(),
+            "path": str(item), "preview": str(preview_path) if preview_path else None,
+            "valid": True,
+        })
+    return sorted(entries, key=lambda entry: entry["title"].lower())
+
+
+def static_entries(config):
+    entries = []
+    for item in config.get("static", []):
+        path = Path(str(item.get("path", ""))).expanduser()
+        entries.append({
+            "id": str(item.get("id", "")), "kind": "static", "title": str(item.get("title") or path.name),
+            "path": str(path), "preview": str(path), "type": "image", "valid": path.is_file(),
+        })
+    return entries
+
+
+def entries(config=None):
+    config = config or load_config()
+    return dynamic_entries() + static_entries(config)
+
+
+def entry_by_id(entry_id, config=None):
+    return next((entry for entry in entries(config) if entry["id"] == entry_id), None)
+
+
+def write_active(payload):
+    STATE.mkdir(parents=True, exist_ok=True)
+    tmp = ACTIVE.with_suffix(".tmp")
+    tmp.write_text(json.dumps(payload, indent=2) + "\n")
+    tmp.replace(ACTIVE)
+
+
+def read_active():
+    try: return json.loads(ACTIVE.read_text())
+    except (OSError, json.JSONDecodeError): return {"kind": "none"}
+
+
+def ensure_transparent():
+    TRANSPARENT.parent.mkdir(parents=True, exist_ok=True)
+    # Qt validates PNG chunks more strictly than some command-line readers.
+    # Generate this asset locally rather than embedding a fragile base64 blob.
+    run(["magick", "-size", "1x1", "xc:none", str(TRANSPARENT)], check=True)
+    run(["omarchy-theme-bg-set", str(TRANSPARENT)])
+
+
+def monitors():
+    result = run(["hyprctl", "monitors", "-j"])
+    try: return json.loads(result.stdout) if result.returncode == 0 else []
+    except json.JSONDecodeError: return []
+
+
+def stop_renderer():
+    # Wallpaper Engine does not always exit promptly after SIGTERM. The
+    # controller is the single owner after migration, so clear every renderer
+    # instance rather than leaving an older background-layer surface behind.
+    pids = set()
+    try: pids.add(int(PID.read_text().strip()))
+    except (OSError, ValueError): pass
+    for proc in Path("/proc").glob("[0-9]*"):
+        try:
+            executable = os.path.basename(os.readlink(proc / "exe"))
+            if executable == "linux-wallpaperengine": pids.add(int(proc.name))
+        except (OSError, ValueError): pass
+    for pid in pids:
+        try: os.killpg(pid, signal.SIGTERM)
+        except OSError:
+            try: os.kill(pid, signal.SIGTERM)
+            except OSError: pass
+    time.sleep(0.25)
+    for pid in pids:
+        try: os.kill(pid, 0)
+        except OSError: continue
+        try: os.killpg(pid, signal.SIGKILL)
+        except OSError:
+            try: os.kill(pid, signal.SIGKILL)
+            except OSError: pass
+    PID.unlink(missing_ok=True)
+
+
+def theme_source(entry):
+    if entry["kind"] == "static": return entry["path"]
+    preview = entry.get("preview")
+    if not preview or not Path(preview).is_file(): return None
+    STATE.mkdir(parents=True, exist_ok=True)
+    target = STATE / "theme-preview.png"
+    result = run(["magick", preview + "[0]", str(target)])
+    return str(target) if result.returncode == 0 and target.is_file() else None
+
+
+def apply_theme(entry):
+    source = theme_source(entry)
+    if source:
+        run(["aether", "--generate", source])
+    ensure_transparent()
+    return bool(source)
+
+
+def make_static_frames(path, config):
+    FRAMES.mkdir(parents=True, exist_ok=True)
+    output_dir = FRAMES / str(time.time_ns())
+    output_dir.mkdir()
+    active = {}
+    for monitor in monitors():
+        if not monitor.get("name"): continue
+        # Hyprland reports an output's unrotated resolution. PanelWindow and
+        # grim use physical post-transform pixels, so rotate and scale here.
+        scale = float(monitor.get("scale", 1) or 1)
+        width = round(float(monitor.get("width", 1)) / scale)
+        height = round(float(monitor.get("height", 1)) / scale)
+        if int(monitor.get("transform", 0)) in (1, 3): width, height = height, width
+        copy = dict(monitor)
+        copy["renderWidth"], copy["renderHeight"] = max(1, width), max(1, height)
+        active[monitor["name"]] = copy
+    groups = [[name for name in group if name in active] for group in config.get("spanGroups", [])]
+    grouped = {name for group in groups for name in group}
+    # A new directory is published only after every output frame is complete.
+    # This prevents Quickshell from decoding a side-monitor image while
+    # ImageMagick is still writing it.
+    work = groups + [[name] for name in active if name not in grouped]
+    for group in work:
+        group_monitors = [active[name] for name in group]
+        min_x = min(m.get("x", 0) for m in group_monitors); min_y = min(m.get("y", 0) for m in group_monitors)
+        max_x = max(m.get("x", 0) + m["renderWidth"] for m in group_monitors); max_y = max(m.get("y", 0) + m["renderHeight"] for m in group_monitors)
+        canvas_w, canvas_h = max_x - min_x, max_y - min_y
+        canvas = output_dir / ("canvas-" + "-".join(group) + ".png")
+        result = run(["magick", path, "-auto-orient", "-resize", f"{canvas_w}x{canvas_h}^", "-gravity", "center", "-extent", f"{canvas_w}x{canvas_h}", str(canvas)])
+        if result.returncode != 0: raise RuntimeError(result.stderr.strip() or "ImageMagick could not prepare wallpaper")
+        for monitor in group_monitors:
+            x, y = monitor.get("x", 0) - min_x, monitor.get("y", 0) - min_y
+            output = output_dir / (monitor["name"] + ".png")
+            result = run(["magick", str(canvas), "-crop", f"{monitor['renderWidth']}x{monitor['renderHeight']}+{x}+{y}", "+repage", str(output)])
+            if result.returncode != 0: raise RuntimeError(result.stderr.strip() or "ImageMagick could not crop wallpaper")
+        canvas.unlink(missing_ok=True)
+    for old in FRAMES.glob("*.png"): old.unlink(missing_ok=True)
+    for old in FRAMES.iterdir():
+        if old.is_dir() and old != output_dir and old.stat().st_mtime < time.time() - 3600:
+            for child in old.iterdir(): child.unlink(missing_ok=True)
+            old.rmdir()
+    return output_dir
+
+
+def launch_live(entry, config):
+    root = workshop()
+    if not root: raise RuntimeError("Wallpaper Engine workshop folder was not found")
+    project = root / entry["workshopId"]
+    if not project.is_dir(): raise RuntimeError("Selected Wallpaper Engine project is no longer installed")
+    current = {m["name"] for m in monitors() if m.get("name")}
+    args = ["linux-wallpaperengine", "--silent", "--fps", str(config.get("renderer", {}).get("fps", 30)), "--layer", "background"]
+    if config.get("renderer", {}).get("compatibility", True): args += ["--disable-particles", "--disable-parallax", "--disable-mouse"]
+    claimed = set()
+    for group in config.get("spanGroups", []):
+        available = [name for name in group if name in current]
+        if len(available) > 1:
+            args += ["--screen-span", ",".join(available), "--bg", str(project), "--scaling", "fill"]
+            if config.get("renderer", {}).get("compatibility", True): args += ["--clamp", "border"]
+            claimed.update(available)
+    for name in sorted(current - claimed):
+        args += ["--screen-root", name, "--bg", str(project), "--scaling", "fill"]
+        if config.get("renderer", {}).get("compatibility", True): args += ["--clamp", "border"]
+    if not current: raise RuntimeError("No active Hyprland monitors found")
+    proc = subprocess.Popen(args, start_new_session=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    STATE.mkdir(parents=True, exist_ok=True); PID.write_text(str(proc.pid) + "\n")
+
+
+def apply(entry_id, sync_theme=True):
+    config = load_config(); entry = entry_by_id(entry_id, config)
+    if not entry or not entry.get("valid"): raise RuntimeError("That wallpaper is unavailable")
+    stop_renderer(); ensure_transparent()
+    frames = ""
+    if entry["kind"] == "live": launch_live(entry, config)
+    else: frames = str(make_static_frames(entry["path"], config))
+    config["active"] = entry_id; config["lastChanged"] = int(time.time()); save_config(config)
+    write_active({"kind": entry["kind"], "id": entry_id, "frames": frames, "title": entry["title"]})
+    themed = apply_theme(entry) if sync_theme else False
+    return {"active": entry_id, "title": entry["title"], "themed": themed}
+
+
+def cycle():
+    config = load_config(); valid = [entry["id"] for entry in entries(config) if entry.get("valid") and entry["id"] in config.get("cycle", [])]
+    if not valid: raise RuntimeError("Select at least one available wallpaper for rotation")
+    remaining = [item for item in config.get("shuffleRemaining", []) if item in valid and item != config.get("active")]
+    if not remaining:
+        remaining = [item for item in valid if item != config.get("active")] or valid[:]
+        random.SystemRandom().shuffle(remaining)
+    next_id = remaining.pop(0); config["shuffleRemaining"] = remaining; save_config(config)
+    return apply(next_id)
+
+
+def due():
+    config = load_config()
+    if not config.get("rotationEnabled", True): return {"due": False}
+    seconds = max(5, min(1440, int(config.get("intervalMinutes", 30)))) * 60
+    if int(time.time()) - int(config.get("lastChanged", 0)) >= seconds: return cycle()
+    return {"due": False}
+
+
+def add_static(paths):
+    config = load_config(); known = {str(x.get("path")) for x in config.get("static", [])}; added = []
+    for raw in paths:
+        path = Path(raw).expanduser().resolve()
+        if not path.is_file() or path.suffix.lower() not in IMAGE_EXTENSIONS or str(path) in known: continue
+        ident = "static:" + hashlib.sha256(str(path).encode()).hexdigest()[:16]
+        config["static"].append({"id": ident, "path": str(path), "title": path.stem})
+        added.append(ident); known.add(str(path))
+    save_config(config); return {"added": added}
+
+
+def remove_static(entry_id):
+    config = load_config()
+    original = list(config.get("static", []))
+    config["static"] = [item for item in original if item.get("id") != entry_id]
+    if len(config["static"]) == len(original): raise RuntimeError("Static wallpaper was not found")
+    config["cycle"] = [item for item in config.get("cycle", []) if item != entry_id]
+    config["shuffleRemaining"] = [item for item in config.get("shuffleRemaining", []) if item != entry_id]
+    if config.get("active") == entry_id:
+        config["active"] = ""
+        write_active({"kind": "none"})
+    save_config(config)
+    return {"removed": entry_id}
+
+
+def toggle_cycle(entry_id):
+    config = load_config(); items = list(config.get("cycle", []))
+    if entry_id in items: items.remove(entry_id)
+    elif entry_by_id(entry_id, config): items.append(entry_id)
+    config["cycle"] = items; config["shuffleRemaining"] = []; save_config(config); return {"cycle": items}
+
+
+def settings(enabled=None, minutes=None):
+    config = load_config()
+    if enabled is not None: config["rotationEnabled"] = enabled.lower() in {"1", "true", "yes", "on"}
+    if minutes is not None: config["intervalMinutes"] = max(5, min(1440, int(minutes)))
+    save_config(config); return config
+
+
+def restore():
+    config = load_config(); active = config.get("active", "")
+    if active and entry_by_id(active, config) and entry_by_id(active, config).get("valid"): return apply(active, sync_theme=False)
+    candidates = [x for x in config.get("cycle", []) if entry_by_id(x, config) and entry_by_id(x, config).get("valid")]
+    if candidates: return apply(candidates[0])
+    ensure_transparent(); write_active({"kind": "none"}); return {"active": None}
+
+
+def migrate_legacy():
+    """Import usable legacy choices once; cleanup is deliberately the installer’s job."""
+    config = load_config()
+    if config.get("migratedLegacy"):
+        return {"migrated": False, "reason": "already migrated"}
+    legacy = HOME / ".config/wallpaper-engine"
+    available = {entry["workshopId"]: entry["id"] for entry in dynamic_entries()}
+    imported = []
+    playlist = legacy / "playlist"
+    if playlist.is_file():
+        for line in playlist.read_text(errors="replace").splitlines():
+            candidate = available.get(line.strip())
+            if candidate and candidate not in imported: imported.append(candidate)
+    current = (legacy / "id").read_text().strip() if (legacy / "id").is_file() else ""
+    current_id = available.get(current, "")
+    if current_id and current_id not in imported: imported.insert(0, current_id)
+    if not imported and "969834539" in available: imported = [available["969834539"]]
+    if not imported and available: imported = [next(iter(available.values()))]
+    config["cycle"] = imported
+    config["active"] = current_id if current_id else (imported[0] if imported else "")
+    config["migratedLegacy"] = True
+    save_config(config)
+    return {"migrated": True, "cycle": imported, "active": config["active"]}
+
+
+def main(argv):
+    command = argv[1] if len(argv) > 1 else "help"
+    try:
+        config = load_config()
+        if command == "entries": result = {"entries": entries(config), "cycle": config.get("cycle", []), "active": config.get("active", ""), "settings": {"rotationEnabled": config.get("rotationEnabled", True), "intervalMinutes": config.get("intervalMinutes", 30)}}
+        elif command == "active": result = read_active()
+        elif command == "apply": result = apply(argv[2])
+        elif command == "cycle": result = cycle()
+        elif command == "due": result = due()
+        elif command == "add-static": result = add_static(argv[2:])
+        elif command == "remove-static": result = remove_static(argv[2])
+        elif command == "toggle-cycle": result = toggle_cycle(argv[2])
+        elif command == "settings": result = settings(argv[2] if len(argv) > 2 else None, argv[3] if len(argv) > 3 else None)
+        elif command == "restore": result = restore()
+        elif command == "migrate-legacy": result = migrate_legacy()
+        elif command == "stop": stop_renderer(); write_active({"kind": "none"}); result = {"stopped": True}
+        else: raise RuntimeError("usage: wallpaper-controller {entries|active|apply ID|cycle|due|add-static PATH...|remove-static ID|toggle-cycle ID|settings ENABLED MINUTES|restore|migrate-legacy|stop}")
+        print(json.dumps(result, ensure_ascii=False))
+    except (RuntimeError, IndexError, ValueError) as error:
+        print(json.dumps({"error": str(error)})); sys.exit(1)
+
+
+if __name__ == "__main__": main(sys.argv)
