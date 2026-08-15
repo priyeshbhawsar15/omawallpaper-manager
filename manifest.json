@@ -4,7 +4,7 @@
   "name": "Wallpaper Controller",
   "version": "1.0.0",
   "author": "arch-setups",
-  "description": "Wallpaper Engine and static-image rotation with Aether theme sync.",
+  "description": "Omarchy wallpaper manager for Wallpaper Engine and static-image rotation with Aether theme sync.",
   "kinds": ["service", "overlay"],
   "keepLoaded": true,
   "entryPoints": {
