@@ -250,6 +250,27 @@ def launch_live(entry, config):
     STATE.mkdir(parents=True, exist_ok=True); PID.write_text(str(proc.pid) + "\n")
 
 
+def find_fallback_video():
+    root = workshop()
+    if not root: return ""
+    for item in root.iterdir():
+        project = item / "project.json"
+        if not item.is_dir() or not project.is_file(): continue
+        try:
+            data = json.loads(project.read_text(errors="replace"))
+            file_prop = data.get("file", "")
+            wp_type = str(data.get("type", "")).lower()
+            target_file = item / file_prop if file_prop else None
+            if target_file and target_file.is_file() and target_file.suffix.lower() in {".mp4", ".webm", ".m4v", ".mkv"}:
+                return str(target_file)
+            elif wp_type == "video":
+                vfile = next((p for p in item.glob("*") if p.suffix.lower() in {".mp4", ".webm", ".m4v", ".mkv"}), None)
+                if vfile: return str(vfile)
+        except Exception:
+            pass
+    return ""
+
+
 def _do_sync_lock_video(entry):
     video_path = ""
     if entry and entry.get("kind") == "live":
@@ -270,17 +291,14 @@ def _do_sync_lock_video(entry):
             except Exception:
                 pass
 
+    if not video_path:
+        video_path = find_fallback_video()
+
     time.sleep(3.5)
-    if video_path:
-        cmds = [
-            ["omarchy-shell", "lock", "setVideo", video_path],
-            ["omarchy-shell", "lock", "setKeepDisplayOn", "true"],
-        ]
-    else:
-        cmds = [
-            ["omarchy-shell", "lock", "clearVideo"],
-            ["omarchy-shell", "lock", "setKeepDisplayOn", "false"],
-        ]
+    cmds = [
+        ["omarchy-shell", "lock", "setVideo", video_path],
+        ["omarchy-shell", "lock", "setKeepDisplayOn", "true"],
+    ]
 
     for cmd in cmds:
         for _ in range(10):
