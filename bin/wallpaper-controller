@@ -17,6 +17,8 @@ ACTIVE = STATE / "active.json"
 PID = STATE / "renderer.pid"
 FRAMES = STATE / "static-frames"
 TRANSPARENT = HOME / ".config/omarchy/backgrounds/wallpaper-controller-transparent.png"
+LOCK_STATE = STATE / "lock-video.json"
+VIDEO_EXTENSIONS = {".mp4", ".webm", ".m4v", ".mkv"}
 WORKSHOP_CANDIDATES = [
     HOME / ".local/share/Steam/steamapps/workshop/content/431960",
     HOME / ".steam/steam/steamapps/workshop/content/431960",
@@ -249,53 +251,66 @@ def launch_live(entry, config):
     STATE.mkdir(parents=True, exist_ok=True); PID.write_text(str(proc.pid) + "\n")
 
 
-def find_fallback_video():
-    root = workshop()
-    if not root: return ""
-    for item in root.iterdir():
-        project = item / "project.json"
-        if not item.is_dir() or not project.is_file(): continue
-        try:
-            data = json.loads(project.read_text(errors="replace"))
-            file_prop = data.get("file", "")
-            wp_type = str(data.get("type", "")).lower()
-            target_file = item / file_prop if file_prop else None
-            if target_file and target_file.is_file() and target_file.suffix.lower() in {".mp4", ".webm", ".m4v", ".mkv"}:
-                return str(target_file)
-            elif wp_type == "video":
-                vfile = next((p for p in item.glob("*") if p.suffix.lower() in {".mp4", ".webm", ".m4v", ".mkv"}), None)
-                if vfile: return str(vfile)
-        except Exception:
-            pass
-    return ""
-
-
-def _do_sync_lock_video(entry):
-    video_path = ""
-    if entry and entry.get("kind") == "live":
-        item_path = Path(entry["path"])
-        project_json = item_path / "project.json"
-        if project_json.is_file():
+def get_lock_video_pool():
+    videos = set()
+    lock_videos_dir = HOME / ".config/omarchy/lock-videos"
+    if lock_videos_dir.is_dir():
+        for p in lock_videos_dir.glob("*"):
             try:
-                data = json.loads(project_json.read_text(errors="replace"))
-                file_prop = data.get("file", "")
-                wp_type = str(data.get("type", "")).lower()
-                target_file = item_path / file_prop if file_prop else None
-                if target_file and target_file.is_file() and target_file.suffix.lower() in {".mp4", ".webm", ".m4v", ".mkv"}:
-                    video_path = str(target_file)
-                elif wp_type == "video":
-                    vfile = next((p for p in item_path.glob("*") if p.suffix.lower() in {".mp4", ".webm", ".m4v", ".mkv"}), None)
-                    if vfile:
-                        video_path = str(vfile)
+                resolved = p.resolve()
+                if resolved.is_file() and resolved.suffix.lower() in VIDEO_EXTENSIONS:
+                    videos.add(str(resolved))
             except Exception:
                 pass
 
-    if not video_path:
-        video_path = find_fallback_video()
+    root = workshop()
+    if root and root.is_dir():
+        for item in root.iterdir():
+            pjson = item / "project.json"
+            if item.is_dir() and pjson.is_file():
+                try:
+                    data = json.loads(pjson.read_text(errors="replace"))
+                    file_prop = data.get("file", "")
+                    wp_type = str(data.get("type", "")).lower()
+                    target_file = item / file_prop if file_prop else None
+                    if target_file and target_file.is_file() and target_file.suffix.lower() in VIDEO_EXTENSIONS:
+                        videos.add(str(target_file.resolve()))
+                    elif wp_type == "video":
+                        vfile = next((p for p in item.glob("*") if p.suffix.lower() in VIDEO_EXTENSIONS), None)
+                        if vfile:
+                            videos.add(str(vfile.resolve()))
+                except Exception:
+                    pass
+    return sorted(list(videos))
 
-    time.sleep(3.5)
+
+def load_lock_state():
+    defaults = {
+        "activeVideo": "",
+        "lastChanged": 0,
+        "intervalMinutes": 30,
+        "shuffleRemaining": [],
+    }
+    try:
+        data = json.loads(LOCK_STATE.read_text())
+        if isinstance(data, dict):
+            defaults.update(data)
+    except (OSError, json.JSONDecodeError):
+        pass
+    return defaults
+
+
+def save_lock_state(data):
+    LOCK_STATE.parent.mkdir(parents=True, exist_ok=True)
+    tmp = LOCK_STATE.with_suffix(".tmp")
+    tmp.write_text(json.dumps(data, indent=2) + "\n")
+    tmp.replace(LOCK_STATE)
+
+
+def _do_apply_lock_video(video_path):
+    time.sleep(1.0)
     cmd = ["omarchy-shell", "lock", "setVideo", video_path]
-    for _ in range(10):
+    for _ in range(15):
         try:
             res = run(cmd)
             if res.returncode == 0 and res.stdout.strip() == "ok":
@@ -305,10 +320,49 @@ def _do_sync_lock_video(entry):
         time.sleep(0.5)
 
 
-def sync_lock_video(entry):
+def apply_lock_video(video_path):
     import threading
-    t = threading.Thread(target=_do_sync_lock_video, args=(entry,), daemon=False)
+    t = threading.Thread(target=_do_apply_lock_video, args=(video_path,), daemon=False)
     t.start()
+
+
+def lock_cycle():
+    pool = get_lock_video_pool()
+    if not pool:
+        return {"activeVideo": None, "reason": "no videos found"}
+    state = load_lock_state()
+    active = state.get("activeVideo", "")
+    remaining = [v for v in state.get("shuffleRemaining", []) if v in pool and v != active]
+    if not remaining:
+        remaining = [v for v in pool if v != active] or pool[:]
+        random.SystemRandom().shuffle(remaining)
+    next_video = remaining.pop(0)
+    state["activeVideo"] = next_video
+    state["shuffleRemaining"] = remaining
+    state["lastChanged"] = int(time.time())
+    save_lock_state(state)
+    apply_lock_video(next_video)
+    return {"activeVideo": next_video}
+
+
+def lock_due():
+    state = load_lock_state()
+    pool = get_lock_video_pool()
+    if not pool:
+        return {"due": False}
+    interval_seconds = max(5, min(1440, int(state.get("intervalMinutes", 30)))) * 60
+    if not state.get("activeVideo") or int(time.time()) - int(state.get("lastChanged", 0)) >= interval_seconds:
+        return lock_cycle()
+    return {"due": False}
+
+
+def lock_restore():
+    state = load_lock_state()
+    active = state.get("activeVideo", "")
+    if active and Path(active).is_file():
+        apply_lock_video(active)
+        return {"activeVideo": active}
+    return lock_cycle()
 
 
 def apply(entry_id, sync_theme=True):
@@ -321,7 +375,6 @@ def apply(entry_id, sync_theme=True):
     config["active"] = entry_id; config["lastChanged"] = int(time.time()); save_config(config)
     write_active({"kind": entry["kind"], "id": entry_id, "frames": frames, "title": entry["title"]})
     themed = apply_theme(entry) if sync_theme else False
-    sync_lock_video(entry)
     return {"active": entry_id, "title": entry["title"], "themed": themed}
 
 
@@ -433,9 +486,14 @@ def main(argv):
         elif command == "toggle-cycle": result = toggle_cycle(argv[2])
         elif command == "settings": result = settings(argv[2] if len(argv) > 2 else None, argv[3] if len(argv) > 3 else None)
         elif command == "restore": result = restore()
+        elif command == "lock-cycle": result = lock_cycle()
+        elif command == "lock-due": result = lock_due()
+        elif command == "lock-restore": result = lock_restore()
+        elif command == "lock-active": result = load_lock_state()
+        elif command == "lock-pool": result = {"pool": get_lock_video_pool()}
         elif command == "migrate-legacy": result = migrate_legacy()
         elif command == "stop": stop_renderer(); write_active({"kind": "none"}); result = {"stopped": True}
-        else: raise RuntimeError("usage: wallpaper-controller {entries|active|apply ID|cycle|due|add-static PATH...|remove-static ID|toggle-cycle ID|settings ENABLED MINUTES|restore|migrate-legacy|stop}")
+        else: raise RuntimeError("usage: wallpaper-controller {entries|active|apply ID|cycle|due|add-static PATH...|remove-static ID|toggle-cycle ID|settings ENABLED MINUTES|restore|lock-cycle|lock-due|lock-restore|lock-active|lock-pool|migrate-legacy|stop}")
         print(json.dumps(result, ensure_ascii=False))
     except (RuntimeError, IndexError, ValueError) as error:
         print(json.dumps({"error": str(error)})); sys.exit(1)

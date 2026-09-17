@@ -18,6 +18,7 @@ Item {
     running: true
     onExited: {
       restoreProcess.running = true
+      lockRestoreProcess.running = true
       root.refreshActive()
     }
   }
@@ -25,6 +26,10 @@ Item {
     id: restoreProcess
     command: ["wallpaper-controller", "restore"]
     onExited: root.refreshActive()
+  }
+  Process {
+    id: lockRestoreProcess
+    command: ["wallpaper-controller", "lock-restore"]
   }
   Process {
     id: activeProcess
@@ -36,11 +41,18 @@ Item {
     command: ["wallpaper-controller", "due"]
     onExited: root.refreshActive()
   }
+  Process {
+    id: lockDueProcess
+    command: ["wallpaper-controller", "lock-due"]
+  }
   Timer {
     interval: 60000
     repeat: true
     running: true
-    onTriggered: { if (!dueProcess.running) dueProcess.running = true }
+    onTriggered: {
+      if (!dueProcess.running) dueProcess.running = true
+      if (!lockDueProcess.running) lockDueProcess.running = true
+    }
   }
   Timer { interval: 5000; repeat: true; running: true; onTriggered: root.refreshActive() }
 
