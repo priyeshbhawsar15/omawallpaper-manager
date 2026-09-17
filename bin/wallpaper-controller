@@ -250,6 +250,44 @@ def launch_live(entry, config):
     STATE.mkdir(parents=True, exist_ok=True); PID.write_text(str(proc.pid) + "\n")
 
 
+def _do_sync_lock_video(entry):
+    video_path = ""
+    if entry and entry.get("kind") == "live":
+        item_path = Path(entry["path"])
+        project_json = item_path / "project.json"
+        if project_json.is_file():
+            try:
+                data = json.loads(project_json.read_text(errors="replace"))
+                file_prop = data.get("file", "")
+                wp_type = str(data.get("type", "")).lower()
+                target_file = item_path / file_prop if file_prop else None
+                if target_file and target_file.is_file() and target_file.suffix.lower() in {".mp4", ".webm", ".m4v", ".mkv"}:
+                    video_path = str(target_file)
+                elif wp_type == "video":
+                    vfile = next((p for p in item_path.glob("*") if p.suffix.lower() in {".mp4", ".webm", ".m4v", ".mkv"}), None)
+                    if vfile:
+                        video_path = str(vfile)
+            except Exception:
+                pass
+
+    time.sleep(3.5)
+    cmd = ["omarchy-shell", "lock", "setVideo", video_path] if video_path else ["omarchy-shell", "lock", "clearVideo"]
+    for _ in range(10):
+        try:
+            res = run(cmd)
+            if res.returncode == 0 and res.stdout.strip() == "ok":
+                break
+        except Exception:
+            pass
+        time.sleep(0.5)
+
+
+def sync_lock_video(entry):
+    import threading
+    t = threading.Thread(target=_do_sync_lock_video, args=(entry,), daemon=False)
+    t.start()
+
+
 def apply(entry_id, sync_theme=True):
     config = load_config(); entry = entry_by_id(entry_id, config)
     if not entry or not entry.get("valid"): raise RuntimeError("That wallpaper is unavailable")
@@ -260,6 +298,7 @@ def apply(entry_id, sync_theme=True):
     config["active"] = entry_id; config["lastChanged"] = int(time.time()); save_config(config)
     write_active({"kind": entry["kind"], "id": entry_id, "frames": frames, "title": entry["title"]})
     themed = apply_theme(entry) if sync_theme else False
+    sync_lock_video(entry)
     return {"active": entry_id, "title": entry["title"], "themed": themed}
 
 
