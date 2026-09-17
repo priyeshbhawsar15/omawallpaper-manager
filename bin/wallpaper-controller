@@ -240,7 +240,6 @@ def launch_live(entry, config):
         available = [name for name in group if name in current]
         if len(available) > 1:
             args += ["--screen-span", ",".join(available), "--bg", str(project), "--scaling", "fill"]
-            if config.get("renderer", {}).get("compatibility", True): args += ["--clamp", "border"]
             claimed.update(available)
     for name in sorted(current - claimed):
         args += ["--screen-root", name, "--bg", str(project), "--scaling", "fill"]
