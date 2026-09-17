@@ -134,9 +134,18 @@ def ensure_transparent():
 
 
 def monitors():
-    result = run(["hyprctl", "monitors", "-j"])
+    result = run(["hyprctl", "monitors", "all", "-j"])
     try: return json.loads(result.stdout) if result.returncode == 0 else []
     except json.JSONDecodeError: return []
+
+
+def is_live_running():
+    try:
+        pid = int(PID.read_text().strip())
+        os.kill(pid, 0)
+        return True
+    except (OSError, ValueError):
+        return False
 
 
 def stop_renderer():
@@ -439,8 +448,9 @@ def settings(enabled=None, minutes=None):
 def restore():
     config = load_config(); active = config.get("active", "")
     if active and entry_by_id(active, config) and entry_by_id(active, config).get("valid"):
-        # Rebuild the Aether theme after every shell/plugin startup so its
-        # colors always match the restored active wallpaper.
+        entry = entry_by_id(active, config)
+        if entry.get("kind") == "live" and is_live_running():
+            return {"active": active, "title": entry["title"], "running": True}
         return apply(active, sync_theme=True)
     candidates = [x for x in config.get("cycle", []) if entry_by_id(x, config) and entry_by_id(x, config).get("valid")]
     if candidates: return apply(candidates[0])
