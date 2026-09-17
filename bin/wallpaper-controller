@@ -294,20 +294,15 @@ def _do_sync_lock_video(entry):
         video_path = find_fallback_video()
 
     time.sleep(3.5)
-    cmds = [
-        ["omarchy-shell", "lock", "setVideo", video_path],
-        ["omarchy-shell", "lock", "setKeepDisplayOn", "true"],
-    ]
-
-    for cmd in cmds:
-        for _ in range(10):
-            try:
-                res = run(cmd)
-                if res.returncode == 0 and res.stdout.strip() == "ok":
-                    break
-            except Exception:
-                pass
-            time.sleep(0.5)
+    cmd = ["omarchy-shell", "lock", "setVideo", video_path]
+    for _ in range(10):
+        try:
+            res = run(cmd)
+            if res.returncode == 0 and res.stdout.strip() == "ok":
+                break
+        except Exception:
+            pass
+        time.sleep(0.5)
 
 
 def sync_lock_video(entry):
