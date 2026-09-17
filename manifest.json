@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "priyesh.wallpaper-controller",
   "name": "Wallpaper Controller",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "author": "arch-setups",
   "description": "Omarchy wallpaper manager for Wallpaper Engine and static-image rotation with Aether theme sync.",
   "kinds": ["service", "overlay"],

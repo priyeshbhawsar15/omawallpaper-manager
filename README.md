@@ -2,7 +2,8 @@
 
 An Omarchy Quickshell plugin for rotating Wallpaper Engine projects and static
 images. It can apply a wallpaper per monitor, rotate selected entries, and sync
-the active wallpaper to the system theme with Aether.
+the active wallpaper to the system theme with Aether. It regenerates the Aether
+theme when restoring the active wallpaper after startup as well.
 
 **Repository description:** Omarchy wallpaper manager for Wallpaper Engine and static-image rotation with Aether theme sync.
 

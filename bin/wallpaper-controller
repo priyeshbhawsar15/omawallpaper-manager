@@ -323,7 +323,10 @@ def settings(enabled=None, minutes=None):
 
 def restore():
     config = load_config(); active = config.get("active", "")
-    if active and entry_by_id(active, config) and entry_by_id(active, config).get("valid"): return apply(active, sync_theme=False)
+    if active and entry_by_id(active, config) and entry_by_id(active, config).get("valid"):
+        # Rebuild the Aether theme after every shell/plugin startup so its
+        # colors always match the restored active wallpaper.
+        return apply(active, sync_theme=True)
     candidates = [x for x in config.get("cycle", []) if entry_by_id(x, config) and entry_by_id(x, config).get("valid")]
     if candidates: return apply(candidates[0])
     ensure_transparent(); write_active({"kind": "none"}); return {"active": None}
