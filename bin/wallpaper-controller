@@ -261,6 +261,8 @@ def launch_live(entry, config):
     if not current: raise RuntimeError("No active Hyprland monitors found")
     proc = subprocess.Popen(args, start_new_session=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     STATE.mkdir(parents=True, exist_ok=True); PID.write_text(str(proc.pid) + "\n")
+    try: (STATE / "monitors.json").write_text(json.dumps(sorted(list(current))) + "\n")
+    except Exception: pass
 
 
 def get_lock_video_pool():
@@ -452,7 +454,12 @@ def restore():
     config = load_config(); active = config.get("active", "")
     if active and entry_by_id(active, config) and entry_by_id(active, config).get("valid"):
         entry = entry_by_id(active, config)
-        if entry.get("kind") == "live" and is_live_running():
+        current = sorted([m["name"] for m in monitors() if m.get("name")])
+        monitors_file = STATE / "monitors.json"
+        saved = []
+        try: saved = json.loads(monitors_file.read_text()) if monitors_file.is_file() else []
+        except Exception: pass
+        if entry.get("kind") == "live" and is_live_running() and saved == current:
             return {"active": active, "title": entry["title"], "running": True}
         return apply(active, sync_theme=True)
     candidates = [x for x in config.get("cycle", []) if entry_by_id(x, config) and entry_by_id(x, config).get("valid")]
