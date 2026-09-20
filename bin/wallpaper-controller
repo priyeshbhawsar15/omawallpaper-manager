@@ -135,8 +135,11 @@ def ensure_transparent():
 
 def monitors():
     result = run(["hyprctl", "monitors", "all", "-j"])
-    try: return json.loads(result.stdout) if result.returncode == 0 else []
-    except json.JSONDecodeError: return []
+    try:
+        items = json.loads(result.stdout) if result.returncode == 0 else []
+        return [m for m in items if isinstance(m, dict) and not m.get("disabled", False)]
+    except json.JSONDecodeError:
+        return []
 
 
 def is_live_running():
