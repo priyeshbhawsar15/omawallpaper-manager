@@ -37,8 +37,11 @@ SOLID_FINAL_FALLBACK_WORKSHOPS = {"3357402729", "3062586648", "2897629925"}
 OBJECT_ONLY_FALLBACK_WORKSHOPS = {"3357402729": 16}
 # GreenForest. 3 enables a scene-wide blur and camera shake by default. Both
 # make its tree scene look soft and enlarged on the compositor's background
-# surface, so keep those optional effects off for this workshop item only.
-PROPERTY_FALLBACK_WORKSHOPS = {"3347344353": {"blur": "false", "camerashake": "false"}}
+# surface. Lonely Cat enables HDR, which produces over-bright SDR output.
+PROPERTY_FALLBACK_WORKSHOPS = {
+    "3347344353": {"blur": "false", "camerashake": "false"},
+    "3299228616": {"hdr": "false"},
+}
 
 
 def run(args, check=False):
