@@ -29,7 +29,7 @@ IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp", ".bmp", ".gif"}
 # uninitialized white rectangle for these complex Wallpaper Engine scenes.
 # Skip only that incompatible pass; every other wallpaper keeps its normal
 # renderer path and visual effects.
-SOLID_FINAL_FALLBACK_WORKSHOPS = {"3357402729", "3062586648"}
+SOLID_FINAL_FALLBACK_WORKSHOPS = {"3357402729", "3062586648", "2897629925"}
 # Cloudy Mountain's optional media-player scene graph leaves a black thumbnail
 # shell behind on Linux even when its own visibility property is disabled. Its
 # primary scenic composition is object 16; rendering only that object retains
