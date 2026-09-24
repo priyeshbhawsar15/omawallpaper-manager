@@ -35,6 +35,10 @@ SOLID_FINAL_FALLBACK_WORKSHOPS = {"3357402729", "3062586648", "2897629925"}
 # primary scenic composition is object 16; rendering only that object retains
 # the mountain/cloud scene and omits the broken optional overlays.
 OBJECT_ONLY_FALLBACK_WORKSHOPS = {"3357402729": 16}
+# GreenForest. 3 enables a scene-wide blur and camera shake by default. Both
+# make its tree scene look soft and enlarged on the compositor's background
+# surface, so keep those optional effects off for this workshop item only.
+PROPERTY_FALLBACK_WORKSHOPS = {"3347344353": {"blur": "false", "camerashake": "false"}}
 
 
 def run(args, check=False):
@@ -270,6 +274,12 @@ def launch_live(entry, config):
             args += ["--render-debug", "object=" + str(object_id)]
         except (TypeError, ValueError):
             pass
+    property_fallbacks = renderer.get("propertiesFor", PROPERTY_FALLBACK_WORKSHOPS)
+    if isinstance(property_fallbacks, dict):
+        properties = property_fallbacks.get(entry["workshopId"], {})
+        if isinstance(properties, dict):
+            for name, value in properties.items():
+                args += ["--set-property", str(name) + "=" + str(value)]
     claimed = set()
     for group in config.get("spanGroups", []):
         available = [name for name in group if name in current]
