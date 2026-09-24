@@ -59,6 +59,7 @@ def defaults():
     return {
         "version": 1,
         "rotationEnabled": True,
+        "wallpaperEnabled": True,
         "intervalMinutes": 30,
         "cycle": [],
         "static": [],
@@ -420,6 +421,9 @@ def apply(entry_id, sync_theme=True):
     frames = ""
     if entry["kind"] == "live": launch_live(entry, config)
     else: frames = str(make_static_frames(entry["path"], config))
+    # Applying a wallpaper is the explicit action that re-enables the renderer
+    # after it has been stopped.
+    config["wallpaperEnabled"] = True
     config["active"] = entry_id; config["lastChanged"] = int(time.time()); save_config(config)
     write_active({"kind": entry["kind"], "id": entry_id, "frames": frames, "title": entry["title"]})
     themed = apply_theme(entry) if sync_theme else False
@@ -427,7 +431,10 @@ def apply(entry_id, sync_theme=True):
 
 
 def cycle():
-    config = load_config(); valid = [entry["id"] for entry in entries(config) if entry.get("valid") and entry["id"] in config.get("cycle", [])]
+    config = load_config()
+    if not config.get("wallpaperEnabled", True):
+        return {"cycled": False, "reason": "wallpaper engine is stopped"}
+    valid = [entry["id"] for entry in entries(config) if entry.get("valid") and entry["id"] in config.get("cycle", [])]
     if not valid: raise RuntimeError("Select at least one available wallpaper for rotation")
     remaining = [item for item in config.get("shuffleRemaining", []) if item in valid and item != config.get("active")]
     if not remaining:
@@ -439,7 +446,7 @@ def cycle():
 
 def due():
     config = load_config()
-    if not config.get("rotationEnabled", True): return {"due": False}
+    if not config.get("wallpaperEnabled", True) or not config.get("rotationEnabled", True): return {"due": False}
     seconds = max(5, min(1440, int(config.get("intervalMinutes", 30)))) * 60
     if int(time.time()) - int(config.get("lastChanged", 0)) >= seconds: return cycle()
     return {"due": False}
@@ -485,7 +492,13 @@ def settings(enabled=None, minutes=None):
 
 
 def restore():
-    config = load_config(); active = config.get("active", "")
+    config = load_config()
+    if not config.get("wallpaperEnabled", True):
+        stop_renderer()
+        ensure_transparent()
+        write_active({"kind": "none"})
+        return {"active": None, "disabled": True}
+    active = config.get("active", "")
     if active and entry_by_id(active, config) and entry_by_id(active, config).get("valid"):
         entry = entry_by_id(active, config)
         current = sorted([m["name"] for m in monitors() if m.get("name")])
@@ -546,7 +559,12 @@ def main(argv):
         elif command == "lock-active": result = load_lock_state()
         elif command == "lock-pool": result = {"pool": get_lock_video_pool()}
         elif command == "migrate-legacy": result = migrate_legacy()
-        elif command == "stop": stop_renderer(); write_active({"kind": "none"}); result = {"stopped": True}
+        elif command == "stop":
+            stop_renderer()
+            config["wallpaperEnabled"] = False
+            save_config(config)
+            write_active({"kind": "none"})
+            result = {"stopped": True}
         else: raise RuntimeError("usage: wallpaper-controller {entries|active|apply ID|cycle|due|add-static PATH...|remove-static ID|toggle-cycle ID|settings ENABLED MINUTES|restore|lock-cycle|lock-due|lock-restore|lock-active|lock-pool|migrate-legacy|stop}")
         print(json.dumps(result, ensure_ascii=False))
     except (RuntimeError, IndexError, ValueError) as error:
