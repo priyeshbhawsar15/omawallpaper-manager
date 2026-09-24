@@ -25,6 +25,11 @@ WORKSHOP_CANDIDATES = [
     HOME / ".var/app/com.valvesoftware.Steam/data/Steam/steamapps/workshop/content/431960",
 ]
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp", ".bmp", ".gif"}
+# The upstream Linux renderer's solid final-composition pass produces an
+# uninitialized white rectangle for these complex Wallpaper Engine scenes.
+# Skip only that incompatible pass; every other wallpaper keeps its normal
+# renderer path and visual effects.
+SOLID_FINAL_FALLBACK_WORKSHOPS = {"3357402729", "3062586648"}
 
 
 def run(args, check=False):
@@ -247,8 +252,12 @@ def launch_live(entry, config):
     project = root / entry["workshopId"]
     if not project.is_dir(): raise RuntimeError("Selected Wallpaper Engine project is no longer installed")
     current = {m["name"] for m in monitors() if m.get("name")}
-    args = ["linux-wallpaperengine", "--silent", "--fps", str(config.get("renderer", {}).get("fps", 30)), "--layer", "background"]
-    if config.get("renderer", {}).get("compatibility", True): args += ["--disable-particles", "--disable-parallax", "--disable-mouse"]
+    renderer = config.get("renderer", {})
+    args = ["linux-wallpaperengine", "--silent", "--fps", str(renderer.get("fps", 30)), "--layer", "background"]
+    if renderer.get("compatibility", True): args += ["--disable-particles", "--disable-parallax", "--disable-mouse"]
+    fallback_ids = renderer.get("skipSolidFinalFor", SOLID_FINAL_FALLBACK_WORKSHOPS)
+    if isinstance(fallback_ids, (list, tuple, set)) and entry["workshopId"] in {str(item) for item in fallback_ids}:
+        args += ["--render-debug", "no-solid-final"]
     claimed = set()
     for group in config.get("spanGroups", []):
         available = [name for name in group if name in current]
@@ -257,7 +266,7 @@ def launch_live(entry, config):
             claimed.update(available)
     for name in sorted(current - claimed):
         args += ["--screen-root", name, "--bg", str(project), "--scaling", "fill"]
-        if config.get("renderer", {}).get("compatibility", True): args += ["--clamp", "border"]
+        if renderer.get("compatibility", True): args += ["--clamp", "border"]
     if not current: raise RuntimeError("No active Hyprland monitors found")
     proc = subprocess.Popen(args, start_new_session=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     STATE.mkdir(parents=True, exist_ok=True); PID.write_text(str(proc.pid) + "\n")
