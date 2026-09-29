@@ -432,8 +432,8 @@ def apply(entry_id, sync_theme=True):
 
 def cycle():
     config = load_config()
-    if not config.get("wallpaperEnabled", True):
-        return {"cycled": False, "reason": "wallpaper engine is stopped"}
+    # Cycling is an explicit user action, so it must re-enable a renderer that
+    # was persistently stopped. Automatic rotation remains blocked in due().
     valid = [entry["id"] for entry in entries(config) if entry.get("valid") and entry["id"] in config.get("cycle", [])]
     if not valid: raise RuntimeError("Select at least one available wallpaper for rotation")
     remaining = [item for item in config.get("shuffleRemaining", []) if item in valid and item != config.get("active")]

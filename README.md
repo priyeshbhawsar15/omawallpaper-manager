@@ -23,8 +23,10 @@ Then install and enable the plugin:
 omarchy plugin add https://github.com/priyeshbhawsar15/omawallpaper-manager.git --enable
 ```
 
-Open **Wallpaper Controller** from the Omarchy menu under Style. On a Quattro
-setup, `Super+Alt+W` can be bound to:
+Open **Wallpaper Controller** from the Omarchy menu under Style. Stopping the
+renderer persists across automatic rotation and session restore; manually
+cycling or selecting a wallpaper explicitly re-enables it. On a Quattro setup,
+`Super+Alt+W` can be bound to:
 
 ```bash
 omarchy-shell shell summon priyesh.wallpaper-controller
